@@ -6,6 +6,9 @@ from multiprocessing import Pool
 import sys
 import time
 from dotenv import load_dotenv
+from flask import Flask, request
+
+app = Flask(__name__)
 
 class MovieComparer:
     """ To provide apis results and price comparison from 2 Databases
@@ -16,25 +19,19 @@ class MovieComparer:
         load_dotenv()
         self.api_url_base = os.getenv('API_URL_BASE')
         self.token = os.getenv('API_TOKEN')
+        self.title_map = defaultdict(list)
 
-        exp = 1
-        while True:
-            cinemaworld_movies, filmworld_movies = self.get_movies()
-            if cinemaworld_movies is None:
-                print("Error in fetching movies list")
-                self.exponential_backoff(exp)
-                exp *= 2
-            else:
-                break
+    def get_all_movies(self):
+        """ Find dictionary of movies
+        """
+        cinemaworld_movies, filmworld_movies = self.get_movies()
 
-        self.title_map = self.get_title_map(cinemaworld_movies, filmworld_movies)
-        self.title_list = sorted(list(self.title_map.keys()))
+        if cinemaworld_movies is not None:
+            self.get_title_map(cinemaworld_movies, "cinemaworld")
+        if filmworld_movies is not None:
+            self.get_title_map(filmworld_movies, "filmworld")
 
-        self.show_all_movies()
-
-    def exponential_backoff(self, exp_secs):
-        print("Trying again in {} seconds".format(exp_secs))
-        time.sleep(exp_secs)
+        return self.title_map
 
     def get_url_parameters(self):
         """ Get URL parameters and token from environment variable
@@ -50,13 +47,13 @@ class MovieComparer:
         headers = self.get_url_parameters()
 
         try:
-            response = requests.get(api_url, headers=headers, timeout=1)
+            response = requests.get(api_url, headers=headers, timeout=5)
         except requests.exceptions.Timeout as e:
-            print("{}, Try again".format(e))
+            print(e)
             return None
         except requests.exceptions.RequestException as e:
             print(e)
-            exit()
+            return None
 
         if response.status_code == 200:
             data_dict = json.loads(response.content.decode('utf-8'))
@@ -80,16 +77,10 @@ class MovieComparer:
         world = pick_info['world']
         _id = pick_info['id']
         api_url = self.api_url_base + '/api/{}/movie/{}'.format(world, _id)
-        exp = 1
-        while True:
-            movie_data = self.get_dict_from_apis(api_url)
-            if movie_data is None:
-                print("Error in fetching movie with id:{}".format(_id))
-                self.exponential_backoff(exp)
-                exp *= 2
-            else:
-                movie_data['world'] = world
-                break
+
+        movie_data = self.get_dict_from_apis(api_url)
+        if movie_data is not None:
+            movie_data['world'] = world
 
         return movie_data
 
@@ -106,8 +97,6 @@ class MovieComparer:
 
         for m_world in movies_world:
             world_type = list(m_world)[0]
-            if m_world[world_type] == None:
-                return None, None
             if world_type == "cinemaworld":
                 cinemaworld_movies = m_world[world_type]
             elif world_type == "filmworld":
@@ -122,48 +111,36 @@ class MovieComparer:
             movie['world'] = world
             yield movie
 
-    def  get_title_map(self, cinemaworld_movies, filmworld_movies):
+    def  get_title_map(self, world_movies, world):
         """ Returning title map as title as key and movie info as value
         """
-        title_map = defaultdict(list)
+        title_gen = self.titles_generator(world_movies, world)
+        for movie in title_gen:
+            self.title_map[movie['Title'].strip().lower()].append(movie)
 
-        cinema_gen = self.titles_generator(cinemaworld_movies, "cinemaworld")
-        for movie in cinema_gen:
-            title_map[movie['Title'].strip().lower()].append(movie)
-        film_gen = self.titles_generator(filmworld_movies, "filmworld")
-        for movie in film_gen:
-            title_map[movie['Title'].strip().lower()].append(movie)
-
-        return title_map
-
-    def  show_all_movies(self):
-        """ Print all unique movies from 2 databases
-        """
-        print("All Movies List:\n----------------------------")
-        for index, title in enumerate(self.title_list):
-            movie = self.title_map[title][0]
-            print(" Index: {0}\n Title: {1}\n Year: {2}\n Type: {3}\n Poster: {4}"
-                .format(index + 1, title, movie['Year'], movie['Type'], movie['Poster']))
-            print("-------------------------------------------------------------\n")
-
-    def get_cheapest(self, pick):
+    def get_cheapest_price(self, movie_title):
         """ Provide the cheapest price by comparing from multiple databases
         """
-        pool = Pool(2)
+        self.get_all_movies()
+        movie_list = self.title_map.get(movie_title.strip().lower(), [])
+
+        if movie_list is None:
+            return None
+
         pick_list = []
-
-        try:
-            for movie_info in self.title_map[self.title_list[pick - 1]]:
-                movie_id = movie_info['ID']
+        for movie_info in movie_list:
+            try:
+                movie_id =  movie_info['ID']
                 movie_world = movie_info['world']
-                pick_list.append({'id': movie_id, 'world': movie_world})
-        except IndexError:
-            print("Please provide valid index")
-            return None
-        except TypeError:
-            print("Please provide valid index")
+            except KeyError as e:
+                print("Price is not available for {}".format(movie_title))
+                continue
+            pick_list.append({'id': movie_id, 'world': movie_world})
+
+        if pick_list is None:
             return None
 
+        pool = Pool(2)
         movies_list = pool.map(self.get_movie_from_id, pick_list)
         pool.close()
         pool.join()
@@ -172,35 +149,44 @@ class MovieComparer:
         price = sys.float_info.max
         print("\nMovie info from different worlds:\n")
         for movie in movies_list:
+            if movie is None:
+                continue
             print("[{}]".format(movie['world']))
             for key, value in movie.items():
                 print(" {} = {}".format(key, value))
             print("\n")
-            movie_price = float(movie['Price'])
+            try:
+                movie_price = float(movie['Price'])
+            except KeyError as e:
+                print("Price is not available for {}".format(movie_title))
+                continue
             if movie_price < price:
                 price = movie_price
 
-        return price
-        
+        if price == sys.float_info.max:
+            return None
+
+        return str(price)
+
+@app.route('/')
+def get_all_available_movies():
+    """ GET method to provide available movies list
+    """
+    movies_list = MovieComparer().get_all_movies()
+    return json.dumps(movies_list, sort_keys=True)
+
+@app.route('/cheapestprice')
+def get_chepest_price_from_title():
+    """ GET method to provide cheapest price from movie name
+    """
+    movie_title = request.args.get('title', type=str)
+
+    price = MovieComparer().get_cheapest_price(movie_title)
+
+    if price is None:
+        return json.dumps({"Message": "Movie: {} not found in Database".format(movie_title)})
+
+    return json.dumps({"Cheapest Price": price})
+
 if __name__ == '__main__':
-    try:
-        movie_comparer = MovieComparer()
-
-        while True:
-            # Pick a movie from index
-            movie_picked = input("Pick a movie by index (0 for exit): ")
-
-            try:
-                pick = int(movie_picked)
-            except ValueError:
-                print("Please provide valid index")
-                continue
-
-            if pick == 0:
-                exit()
-            price = movie_comparer.get_cheapest(pick)
-            if price is not None:
-                print("***Cheapest Price: {}\n".format(price))
-
-    except Exception as e:
-        print("An error occured, error = {}".format(e))
+    app.run(debug=True, host='0.0.0.0', port=80)
