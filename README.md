@@ -2,26 +2,47 @@
 
 Compare the prices from 2 movie Databases and provide the cheapest price
 
--   Provide .env file with following variables:
+Run Server with Docker:
+
+-   Provide .env file in server folder with following variables:
 
         API_TOKEN="<X-Access-Token>"
         API_URL_BASE="https://webjetapitest.azurewebsites.net"
 
 -   To run it with Docker:
 
-        docker build -t moviecomparer:1.0 .
-        docker run -ti --name comparer moviecomparer:1.0
+        cd server
+        docker build -t movieserver:1.0 .
+        docker run -d -p 80:80 movieserver:1.0
 
-    It will run the test cases written in test.py with unittest
 
--   To run it with movie_comparer.py directly on python 3.7:
+Run client with Docker:
 
-        pip install requests
-        pip install python-dotenv
-        python movie_comparer.py
+-   Provide .env file in client folder with following variables:
 
-    It will show the unique movie names in a list, choose the movie you want to compare the price
+        API_URL_BASE="http://<Server IP or Domain Name>"
+
+-   To run it with Docker:
+
+        cd client
+        docker build -t movieclient:1.0 .
+        docker run -ti --name movie_client movieclient:1.0
+
+-   To run test cases on client:
+
+        cd client
+    
+        -   With Docker:
+                In Dockerfile, change
+                CMD ["python", "movie_client.py"]
+                as
+                CMD ["python", "test.py"]
+                Then run docker build and run as previous
+
+        -   Without Docker:
+                pip install -r requirements.txt
+		        python test.py
 
 -   Used multiprocessing to call the APIs for different databases parallely
 
--   Used exponential backoff, if timeout occurs while retrieving result from a query
+-   Used exponential backoff on client, if timeout occurs while retrieving result from a query
