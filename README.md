@@ -6,7 +6,7 @@ Run Server with Docker:
 
 -   Provide .env file in server folder with following variables:
 
-        API_TOKEN="X-Access-Token"
+        API_TOKEN="<X-Access-Token>"
         API_URL_BASE="https://webjetapitest.azurewebsites.net"
 
 -   To run it with Docker:
